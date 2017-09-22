@@ -1,0 +1,24 @@
+EXTENSIONS README
+=================
+The files in this folder, when being migrated into a new version of ndnSim, should be in the following folders of the ndnSIM:
+
+ndnSim/apps
+-----------
++ evil-producer-app.cpp
++ evil-producer-app.hpp
++ security-toy-client-app.hpp
++ security-toy-client-app.cpp
+
+nfd/daemon/table
+----------------
++ pit-entry.cpp
++ pit-entry.hpp
++ cs-entry.hpp
++ cs-entry.cpp
++ pit-in-record.hpp
++ pit-in-record.cpp
+
+nfd/daemon/fw
+-------------
++ forwarder.cpp
++ forwarder.hpp
