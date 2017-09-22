@@ -147,8 +147,8 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
     return;
   }
 
-  //undoing the const part so we can swap out the interests...
-  Interest& goodInterest = const_cast<Interest&>(interest);
+  cout << "original interest is: " << interest.toUri() << endl;
+
 
   //TO-Do: If exclude interest => create non-exclude version
   bool hasExclude = interest.toUri().find("ndn.Exclude")!= std::string::npos;
@@ -156,10 +156,11 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
 
   if(hasExclude)
   {
+     //this is the only time an excludelessInterest is needed => finding a duplicate nonce
      Interest excludelessInterest = Interest(interest.getName(), interest.getInterestLifetime());
      excludelessInterest.setNonce(interest.getNonce());
      pitEntry = m_pit.insert(excludelessInterest).first;
-     goodInterest = excludelessInterest;
+     cout << "checking interest's original value still the same. interest is: " << interest.toUri() << endl;
   }
   else
   {
@@ -207,15 +208,12 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
            //Send out remedy interest => send the exclude interest.
            cout<< "Remedy Triggered for " << pitEntry->getInRecord(inFace)->getInterest().toUri() << endl;
            NFD_LOG_DEBUG("Remedy for " << pitEntry->getInRecord(inFace)->getInterest().toUri() << " triggered");
-
-           //setting interest into the exclude interest???
-           goodInterest = interest;
         } 
         
        }
        else
        {
-         //give this one the cached response => have to get the exludeless interest
+         //give this one the cached response
          cout<<"Attempting to give interest cached info"<<endl;
          const Data& data = pitEntry->getRespondedData();
          beforeSatisfyInterest(*pitEntry, *m_csFace, data);
@@ -254,22 +252,22 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
   if (!isPending) {
     //found CS data should be what was previously responded
     if (m_csFromNdnSim == nullptr) {
-      m_cs.find(goodInterest,
+      m_cs.find(interest,
                 bind(&Forwarder::onContentStoreHit, this, ref(inFace), pitEntry, _1, _2),
                 bind(&Forwarder::onContentStoreMiss, this, ref(inFace), pitEntry, _1));
     }
     else {
-      shared_ptr<Data> match = m_csFromNdnSim->Lookup(goodInterest.shared_from_this());
+      shared_ptr<Data> match = m_csFromNdnSim->Lookup(interest.shared_from_this());
       if (match != nullptr) {
-        this->onContentStoreHit(inFace, pitEntry, goodInterest, *match);
+        this->onContentStoreHit(inFace, pitEntry, interest, *match);
       }
       else {
-        this->onContentStoreMiss(inFace, pitEntry, goodInterest);
+        this->onContentStoreMiss(inFace, pitEntry, interest);
       }
     }
   }
   else {
-    this->onContentStoreMiss(inFace, pitEntry, goodInterest);
+    this->onContentStoreMiss(inFace, pitEntry, interest);
   }
 }
 
@@ -300,13 +298,23 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
                               const Interest& interest)
 {
   NFD_LOG_DEBUG("onContentStoreMiss interest=" << interest.getName());
-  cout << "pursuing packet for :" << interest.toUri() << endl;
-  //is currently "looping" since it's sending to the same outface and getting the same answer (going to feed exclude interest
-  //when remedy triggered)
+  cout << "pursuing packet for :" << interest.toUri() << "and PitEntry is awaiting remedy? " << pitEntry->isAwaitingRemedy()<< endl;
   //CAN'T BE DONE: if not exclude interest and is awaiting remedy, try face that is different from the original answer face
 
   // insert in-record
-  pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
+  //create excludeless interest to "update" record if is remedy
+  if(pitEntry->isAwaitingRemedy())
+  { 
+     Interest excludelessInterest = Interest(interest.getName(), interest.getInterestLifetime());
+     excludelessInterest.setNonce(interest.getNonce());
+     shared_ptr<Interest> ptrExcludelessInterest = excludelessInterest.shared_from_this();
+     //bad wk ptr error being thrown here... can't figure out why...
+     pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), *ptrExcludelessInterest);
+  }
+  else
+  {
+      pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
+  }
 
   // set PIT unsatisfy timer
   this->setUnsatisfyTimer(pitEntry);
@@ -328,6 +336,7 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
   // dispatch to strategy: after incoming Interest
   this->dispatchToStrategy(*pitEntry,
     [&] (fw::Strategy& strategy) { strategy.afterReceiveInterest(inFace, interest, pitEntry); });
+  cout << "interest sent: " << interest.toUri() << endl;
 }
 
 void
@@ -336,6 +345,7 @@ Forwarder::onContentStoreHit(const Face& inFace, const shared_ptr<pit::Entry>& p
 {
 
   //To-Do: Check that the data being used matches what was recorded with the pit entry
+  cout << "Found data match for " << data.getName() << endl;
   if(pitEntry->hasRespondedData())
   {
      if(data != pitEntry->getRespondedData() && !pitEntry->isAwaitingRemedy())
@@ -477,12 +487,15 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
   std::set<Face*> pendingDownstreams;
   // foreach PitEntry
   auto now = time::steady_clock::now();
+  FaceId lastFaceId = m_faceTable.getLastFaceId();
+  bool fromApplicationData = (inFace.getId() == lastFaceId);
 
   for (const shared_ptr<pit::Entry>& pitEntry : pitMatches) {
     NFD_LOG_DEBUG("onIncomingData matching=" << pitEntry->getName());
     cout << "onIncomingData matching=" << pitEntry->getName() << "with name " << data.getName() << endl;
 
-    if(pitEntry->isAwaitingRemedy())
+    //ignore this logic if it is from application data
+    if(pitEntry->isAwaitingRemedy() && !fromApplicationData)
     {
        //if the matched pitEntry is awaiting a remedy have to do a bit of cache cleaning
        cout << "PitEntry " << pitEntry->getName() << " is awaiting remedy" << endl;
