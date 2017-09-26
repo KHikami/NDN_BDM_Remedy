@@ -58,7 +58,7 @@ Entry::getInRecord(const Face& face)
 InRecordCollection::iterator
 Entry::insertOrUpdateInRecord(Face& face, const Interest& interest)
 {
-  BOOST_ASSERT(this->canMatch(interest));
+  //BOOST_ASSERT(this->canMatch(interest));
 
   auto it = std::find_if(m_inRecords.begin(), m_inRecords.end(),
     [&face] (const InRecord& inRecord) { return &inRecord.getFace() == &face; });
@@ -97,7 +97,7 @@ Entry::getOutRecord(const Face& face)
 OutRecordCollection::iterator
 Entry::insertOrUpdateOutRecord(Face& face, const Interest& interest)
 {
-  BOOST_ASSERT(this->canMatch(interest));
+  //BOOST_ASSERT(this->canMatch(interest));
 
   auto it = std::find_if(m_outRecords.begin(), m_outRecords.end(),
     [&face] (const OutRecord& outRecord) { return &outRecord.getFace() == &face; });

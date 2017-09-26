@@ -30,6 +30,8 @@
 
 NFD_LOG_INIT("ContentStore");
 
+using namespace std;
+
 namespace nfd {
 namespace cs {
 
@@ -120,34 +122,35 @@ Cs::insert(const Data& data, bool isUnsolicited)
 }
 
 bool
-Cs::deleteEntry(const Interest& interest, const Data& data)
+Cs::deleteEntry(const Data& data)
 {
+  //used to have const Interest& interest, in parameter...
+
   //similar to the find logic, but going to verify the data is the same before marking the match to delete
   //returns true if the delete was successful. False otherwise.
-  const Name& prefix = interest.getName();
-  bool isRightmost = interest.getChildSelector() == 1;
-  NFD_LOG_DEBUG("find " << prefix << (isRightmost ? " R" : " L"));
 
+  //creating a fake interest with the data's name...
+  shared_ptr<Interest> interest = make_shared<Interest>();
+  interest->setName(data.getName());
+  
+  const Name& prefix = interest->getName();
+  
   iterator first = m_table.lower_bound(prefix);
   iterator last = m_table.end();
   if (prefix.size() > 0) {
     last = m_table.lower_bound(prefix.getSuccessor());
   }
 
-  iterator match = last;
-  if (isRightmost) {
-    match = this->findRightmost(interest, first, last);
-  }
-  else {
-    match = this->findLeftmost(interest, first, last);
-  }
+  iterator match = this->findRightmost(*interest, first, last);
 
   if (match == last) {
     NFD_LOG_DEBUG("  no-match");
     return false;
   }
+
   NFD_LOG_DEBUG("found possible match of " << match->getName());
-  if(match->getData() == data)
+  cout << "found possible match of " << match->getName() << " to delete as " << data.getName() << endl;
+  if(match->getName() == data.getName())
   {
      EntryImpl& entry = const_cast<EntryImpl&>(*match);
      entry.reset();
@@ -167,6 +170,7 @@ Cs::find(const Interest& interest,
   const Name& prefix = interest.getName();
   bool isRightmost = interest.getChildSelector() == 1;
   NFD_LOG_DEBUG("find " << prefix << (isRightmost ? " R" : " L"));
+  //cout << "Normal find is rightmost? " << isRightmost << endl;
 
   iterator first = m_table.lower_bound(prefix);
   iterator last = m_table.end();

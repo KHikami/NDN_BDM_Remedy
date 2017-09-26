@@ -89,7 +89,7 @@ public:
        const MissCallback& missCallback) const;
 
   bool
-  deleteEntry(const Interest& interest, const Data& data); 
+  deleteEntry(const Data& data); 
 
   void
   erase(const Name& exactName)

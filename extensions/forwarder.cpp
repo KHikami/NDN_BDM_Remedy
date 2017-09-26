@@ -243,13 +243,13 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
 
   //TO-DO: isPending is now if the pitEntry doesn't have data or isAwaitingRemedy()
   //if NACK => entry was alrewady deleted
-  bool isPending = pitEntry->isAwaitingRemedy() || !(pitEntry->hasRespondedData());
+  bool isSat = !pitEntry->isAwaitingRemedy() && pitEntry->hasRespondedData();
 
   //cout << "PitEntry is currently pending: " << isPending << endl;
 
   //if I am awaiting a remedy or I have not received an Answer => I am pending.
 
-  if (!isPending) {
+  if (isSat) {
     //found CS data should be what was previously responded
     if (m_csFromNdnSim == nullptr) {
       m_cs.find(interest,
@@ -303,18 +303,19 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
 
   // insert in-record
   //create excludeless interest to "update" record if is remedy
-  if(pitEntry->isAwaitingRemedy())
-  { 
-     Interest excludelessInterest = Interest(interest.getName(), interest.getInterestLifetime());
-     excludelessInterest.setNonce(interest.getNonce());
-     shared_ptr<Interest> ptrExcludelessInterest = excludelessInterest.shared_from_this();
-     //bad wk ptr error being thrown here... can't figure out why...
-     pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), *ptrExcludelessInterest);
+  /*if(pitEntry->isAwaitingRemedy())
+  {
+     shared_ptr<Interest> excludelessInterest = make_shared<Interest>();
+     excludelessInterest->setName(interest.getName());
+     excludelessInterest->setInterestLifetime(interest.getInterestLifetime());
+     excludelessInterest->setNonce(interest.getNonce());
+     pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), *excludelessInterest);
   }
   else
   {
       pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
-  }
+  }*/
+  pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
 
   // set PIT unsatisfy timer
   this->setUnsatisfyTimer(pitEntry);
@@ -323,6 +324,7 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
   shared_ptr<lp::NextHopFaceIdTag> nextHopTag = interest.getTag<lp::NextHopFaceIdTag>();
   if (nextHopTag != nullptr) {
     // chosen NextHop face exists?
+    //cout << "Next hop tag exists..." << endl;
     Face* nextHopFace = m_faceTable.get(*nextHopTag);
     if (nextHopFace != nullptr) {
       NFD_LOG_DEBUG("onContentStoreMiss interest=" << interest.getName() << " nexthop-faceid=" << nextHopFace->getId());
@@ -336,7 +338,7 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
   // dispatch to strategy: after incoming Interest
   this->dispatchToStrategy(*pitEntry,
     [&] (fw::Strategy& strategy) { strategy.afterReceiveInterest(inFace, interest, pitEntry); });
-  cout << "interest sent: " << interest.toUri() << endl;
+  //cout << "interest sent: " << interest.toUri() << endl;
 }
 
 void
@@ -345,12 +347,10 @@ Forwarder::onContentStoreHit(const Face& inFace, const shared_ptr<pit::Entry>& p
 {
 
   //To-Do: Check that the data being used matches what was recorded with the pit entry
-  cout << "Found data match for " << data.getName() << endl;
   if(pitEntry->hasRespondedData())
   {
      if(data != pitEntry->getRespondedData() && !pitEntry->isAwaitingRemedy())
      {
-        cout << "Bad hit! " << data.getName() << " doesn't match " << pitEntry->getRespondedData().getName() << endl;
         NFD_LOG_DEBUG("Bad hit! " << data.getName() << " doesn't match " << pitEntry->getRespondedData().getName());
         return;
      }
@@ -381,10 +381,25 @@ Forwarder::onOutgoingInterest(const shared_ptr<pit::Entry>& pitEntry, Face& outF
 {
   NFD_LOG_DEBUG("onOutgoingInterest face=" << outFace.getId() <<
                 " interest=" << pitEntry->getName());
-  cout << "Outgoing Interest face=" << outFace.getId() << " interest=" << interest.toUri() << endl;
+  //cout << "Outgoing Interest face=" << outFace.getId() << " interest=" << interest.toUri() << endl;
 
+  //To-Do: if awaiting remedy, create excludeless interest
   // insert out-record
-  pitEntry->insertOrUpdateOutRecord(outFace, interest);
+  /*if(pitEntry->isAwaitingRemedy())
+  {
+     shared_ptr<Interest> excludelessInterest = make_shared<Interest>();
+     excludelessInterest->setName(interest.getName());
+     excludelessInterest->setInterestLifetime(interest.getInterestLifetime());
+     excludelessInterest->setNonce(interest.getNonce());
+     //cout << "excludeless Interest created!" << endl;
+     pitEntry->insertOrUpdateOutRecord(outFace, *excludelessInterest);
+     //cout << "update complete!" << endl;
+  }
+  else
+  {
+      pitEntry->insertOrUpdateOutRecord(outFace, interest);
+  }*/
+  pitEntry->insertOrUpdateOutRecord(outFace,interest);
 
   // send Interest
   outFace.sendInterest(interest);
@@ -471,6 +486,7 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
   pit::DataMatchResult pitMatches = m_pit.findAllDataMatches(data);
   if (pitMatches.begin() == pitMatches.end()) {
     // goto Data unsolicited pipeline
+    //cout << "Data is UnSolicited" << endl;
     this->onDataUnsolicited(inFace, data);
     return;
   }
@@ -492,34 +508,59 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
 
   for (const shared_ptr<pit::Entry>& pitEntry : pitMatches) {
     NFD_LOG_DEBUG("onIncomingData matching=" << pitEntry->getName());
-    cout << "onIncomingData matching=" << pitEntry->getName() << "with name " << data.getName() << endl;
+    //cout << "onIncomingData matching=" << pitEntry->getName() << "with name " << data.getName() << endl;
 
-    //ignore this logic if it is from application data
-    if(pitEntry->isAwaitingRemedy() && !fromApplicationData)
+    //since def of is pending is no longer if it exists or no in records => have to have this condition else
+    //last responded data is overwritten when no remedy triggered
+    bool pitMatchSat = !pitEntry->isAwaitingRemedy() && pitEntry->hasRespondedData();
+   
+    if(pitMatchSat && !fromApplicationData)
     {
-       //if the matched pitEntry is awaiting a remedy have to do a bit of cache cleaning
-       cout << "PitEntry " << pitEntry->getName() << " is awaiting remedy" << endl;
-       //TO-DO: seems that this is generating too many false positives??? (even on the right data it's not executing
-       //the delete)
-       if(pitEntry->getRespondedData() == data)
+      //have to delete the "lingering" out record for this face.
+      pitEntry->deleteOutRecord(inFace);
+      continue;
+    }
+
+    //ignore awaiting remedy logic if from Application
+    if(fromApplicationData)
+    {
+       //cout << "data is from application" << endl;
+       NFD_LOG_DEBUG("Data is from Application");
+       pitEntry->setAwaitingRemedy(false);
+    }
+
+    //if is awaiting remedy => clear original data, reset awaiting remedy but store that it was awaiting remedy prior
+    bool wasAwaitingRemedy = false;
+    if(pitEntry->isAwaitingRemedy())
+    {
+       wasAwaitingRemedy = true;
+
+       Data lastRespondedData = pitEntry->getRespondedData();
+
+       if(lastRespondedData.getName() == data.getName())
        {
          //ignore this pitmatch...
          //duplicate of the original bad data => don't want this one...
-         cout << "duplicate data received" << endl;
+         NFD_LOG_DEBUG("Duplicate Data of " << data.getName() << " received");
+         //cout << "duplicate data received" << endl;
          continue;
        }
        else
        {
+          NFD_LOG_DEBUG("Fixing PitEntry to record the correct data... clearing cache of " << lastRespondedData.getName());
           pitEntry->setAwaitingRemedy(false);
-          Data lastRespondedData = pitEntry->getRespondedData();
-          auto outInRecord = pitEntry->getInRecord(inFace);
+          cout << "fixing remedy" << endl;
+          //TO-DO: Need to get OutRecord's respective Interest right now this doesn't make sense...
+          //I'm getting the In Record of where the record was sent out (not the in record for the out record)
+          //Interest pitInterest = pitEntry->getInRecords().front().getInterest();
 
-          cout<<"removing data of " << lastRespondedData.getName();
+          cout<<"removing data of " << lastRespondedData.getName() << endl;
 
-          bool successfulDelete = m_cs.deleteEntry(outInRecord->getInterest(), lastRespondedData);
+          bool successfulDelete = m_cs.deleteEntry(lastRespondedData);
+          cout << "delete was successful? " << successfulDelete << endl;
           if(!successfulDelete)
           {
-            cout << "No such entry was found" << endl;
+            //cout << "No such entry was found" << endl;
             NFD_LOG_DEBUG("Previously responded data entry was not found");
           }
        }
@@ -527,38 +568,63 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
     
     //store the record
     pitEntry->setRespondedData(data);
-    //cout << "responded data recorded" << endl;
 
     // cancel unsatisfy & straggler timer
     this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
 
-    // remember pending downstreams
+    std::set<Face*> tempDownstreams;
+    // gather all the possible faces (b/c getInRecords returns read only objects...)
     for (const pit::InRecord& inRecord : pitEntry->getInRecords()) {
-      if (inRecord.getExpiry() > now) {
-        pendingDownstreams.insert(&inRecord.getFace());
-      }
+       tempDownstreams.insert(&inRecord.getFace());
     }
-    //cout << "Finished creating list of pending downstreams" << endl;
 
-    for (Face* pendingDownstream : pendingDownstreams) {
+    // for all the faces for this pitEntry, check if is a pending downstream otherwise do maintenance
+    for (Face* pendingDownstream : tempDownstreams) {
        pit::InRecordCollection::iterator inRecord = pitEntry->getInRecord(*pendingDownstream);
-       inRecord->setInPreviousRemedy(true);
-       inRecord->setReceivedExclude(false);
+       if(wasAwaitingRemedy)
+       {
+           //PitEntry is now remedied => can only remedy valid interests where exclude was given
+           if(inRecord->getReceivedExclude() && inRecord->getExpiry() > now)
+           {
+              //exclude was received => clear the record
+              inRecord->setInPreviousRemedy(true);
+              inRecord->setReceivedExclude(false);
+              pendingDownstreams.insert(pendingDownstream);
+           }
+           else
+           {
+              //if received exclude but expired or not received exclude => set in previous remedy is false.
+              inRecord->setInPreviousRemedy(false);
+           }
+       }
+       else
+       {
+         if(inRecord->getExpiry() > now)
+         {
+            pendingDownstreams.insert(pendingDownstream);
+            inRecord->setInPreviousRemedy(true);
+            inRecord->setReceivedExclude(false);
+         }
+         else
+         {
+            //inRecord expired prior to receiving correct data
+            inRecord->setInPreviousRemedy(false);
+            inRecord->setReceivedExclude(false);
+         }
+       }
     }
-    //cout << "Set in prev remedy to true" << endl;
 
     // invoke PIT satisfy callback
     beforeSatisfyInterest(*pitEntry, inFace, data);
     this->dispatchToStrategy(*pitEntry,
       [&] (fw::Strategy& strategy) { strategy.beforeSatisfyInterest(pitEntry, inFace, data); });
 
+    //This might've been part of the problem....
     // Dead Nonce List insert if necessary (for out-record of inFace)
-    this->insertDeadNonceList(*pitEntry, true, data.getFreshnessPeriod(), &inFace);
+    //this->insertDeadNonceList(*pitEntry, true, data.getFreshnessPeriod(), &inFace);
 
     // mark PIT satisfied
-    //pitEntry->clearInRecords();
     pitEntry->deleteOutRecord(inFace);
-    //cout << "pit entry deleted out record" << endl;
 
     // set PIT straggler timer
     this->setStragglerTimer(pitEntry, true, data.getFreshnessPeriod());
@@ -682,6 +748,7 @@ void
 Forwarder::onOutgoingNack(const shared_ptr<pit::Entry>& pitEntry, const Face& outFace,
                           const lp::NackHeader& nack)
 {
+  cout << "NACK being sent!" << endl;
   if (outFace.getId() == face::INVALID_FACEID) {
     NFD_LOG_WARN("onOutgoingNack face=invalid" <<
                   " nack=" << pitEntry->getInterest().getName() <<
