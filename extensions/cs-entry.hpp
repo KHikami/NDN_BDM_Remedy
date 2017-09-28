@@ -133,10 +133,23 @@ public: // used by generic ContentStore implementation
   void
   reset();
 
+  void
+  deleteEntry()
+  {
+    m_deleted = true;
+  }
+
+  bool
+  isDeleted()
+  {
+    return m_deleted;
+  }
+
 private:
   shared_ptr<const Data> m_data;
   bool m_isUnsolicited;
   time::steady_clock::TimePoint m_staleTime;
+  bool m_deleted;
 };
 
 } // namespace cs

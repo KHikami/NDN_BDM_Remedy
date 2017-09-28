@@ -147,12 +147,11 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
     return;
   }
 
-  cout << "original interest is: " << interest.toUri() << endl;
-
-
-  //TO-Do: If exclude interest => create non-exclude version
   bool hasExclude = interest.toUri().find("ndn.Exclude")!= std::string::npos;
   shared_ptr<pit::Entry> pitEntry;
+
+  //TO-DO: Need to somehow control it such that if my prev responded data did not include "evil" ignore remedy logic
+  //pretend as if the Face sending was correct...
 
   if(hasExclude)
   {
@@ -160,7 +159,7 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
      Interest excludelessInterest = Interest(interest.getName(), interest.getInterestLifetime());
      excludelessInterest.setNonce(interest.getNonce());
      pitEntry = m_pit.insert(excludelessInterest).first;
-     cout << "checking interest's original value still the same. interest is: " << interest.toUri() << endl;
+     NFD_LOG_DEBUG("Interest had exclude... retreived non-exclude interest for interest:" << interest.toUri());
   }
   else
   {
@@ -187,7 +186,6 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
        {
          inRecord->setReceivedExclude(true);
          //set received exclude
-         cout<<"Interest was in previous remedy and this is an exclude. Checking if Remedy Needed"<<endl;
          NFD_LOG_DEBUG("Checking if " << pitEntry << " needs a remedy");
 
         double excludeReceivedCount = 0;
@@ -221,6 +219,7 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
          this->dispatchToStrategy(*pitEntry,
              [&] (fw::Strategy& strategy) { strategy.beforeSatisfyInterest(pitEntry, *m_csFace, data); });
          inRecord->setInPreviousRemedy(true);
+         inRecord->setReceivedExclude(false);
          this->onOutgoingData(data,inFace);
          return;
        }
@@ -241,10 +240,8 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
   //const pit::InRecordCollection& inRecords = pitEntry->getInRecords();
   //bool isPending = inRecords.begin() != inRecords.end();
 
-  //TO-DO: isPending is now if the pitEntry doesn't have data or isAwaitingRemedy()
-  //if NACK => entry was alrewady deleted
   bool isSat = !pitEntry->isAwaitingRemedy() && pitEntry->hasRespondedData();
-
+  NS_LOG_DEBUG("PitEntry is already satisfied: " << isSat);
   //cout << "PitEntry is currently pending: " << isPending << endl;
 
   //if I am awaiting a remedy or I have not received an Answer => I am pending.
@@ -252,11 +249,13 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
   if (isSat) {
     //found CS data should be what was previously responded
     if (m_csFromNdnSim == nullptr) {
+      NFD_LOG_DEBUG("Using CS to look for the hit");
       m_cs.find(interest,
                 bind(&Forwarder::onContentStoreHit, this, ref(inFace), pitEntry, _1, _2),
                 bind(&Forwarder::onContentStoreMiss, this, ref(inFace), pitEntry, _1));
     }
     else {
+      NFD_LOG_DEBUG("Using NdnSim CS to look for the hit");
       shared_ptr<Data> match = m_csFromNdnSim->Lookup(interest.shared_from_this());
       if (match != nullptr) {
         this->onContentStoreHit(inFace, pitEntry, interest, *match);
@@ -302,19 +301,6 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
   //CAN'T BE DONE: if not exclude interest and is awaiting remedy, try face that is different from the original answer face
 
   // insert in-record
-  //create excludeless interest to "update" record if is remedy
-  /*if(pitEntry->isAwaitingRemedy())
-  {
-     shared_ptr<Interest> excludelessInterest = make_shared<Interest>();
-     excludelessInterest->setName(interest.getName());
-     excludelessInterest->setInterestLifetime(interest.getInterestLifetime());
-     excludelessInterest->setNonce(interest.getNonce());
-     pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), *excludelessInterest);
-  }
-  else
-  {
-      pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
-  }*/
   pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
 
   // set PIT unsatisfy timer
@@ -338,18 +324,18 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
   // dispatch to strategy: after incoming Interest
   this->dispatchToStrategy(*pitEntry,
     [&] (fw::Strategy& strategy) { strategy.afterReceiveInterest(inFace, interest, pitEntry); });
-  //cout << "interest sent: " << interest.toUri() << endl;
+  //strategy is in charge of which faces to send out interest to...
 }
 
 void
 Forwarder::onContentStoreHit(const Face& inFace, const shared_ptr<pit::Entry>& pitEntry,
                              const Interest& interest, const Data& data)
 {
-
-  //To-Do: Check that the data being used matches what was recorded with the pit entry
   if(pitEntry->hasRespondedData())
   {
-     if(data != pitEntry->getRespondedData() && !pitEntry->isAwaitingRemedy())
+     NFD_LOG_DEBUG("Responding with previous data!");
+     //Doing a name compare because producers randomize payload each time
+     if(data.getName() != pitEntry->getRespondedData().getName() && !pitEntry->isAwaitingRemedy())
      {
         NFD_LOG_DEBUG("Bad hit! " << data.getName() << " doesn't match " << pitEntry->getRespondedData().getName());
         return;
@@ -367,6 +353,7 @@ Forwarder::onContentStoreHit(const Face& inFace, const shared_ptr<pit::Entry>& p
    //Interest fulfilled by cached data
    pit::InRecordCollection::iterator inRecord = pitEntry->getInRecord(inFace);
    inRecord->setInPreviousRemedy(true);
+   inRecord->setReceivedExclude(false);
 
    // set PIT straggler timer
    this->setStragglerTimer(pitEntry, true, data.getFreshnessPeriod());
@@ -381,24 +368,7 @@ Forwarder::onOutgoingInterest(const shared_ptr<pit::Entry>& pitEntry, Face& outF
 {
   NFD_LOG_DEBUG("onOutgoingInterest face=" << outFace.getId() <<
                 " interest=" << pitEntry->getName());
-  //cout << "Outgoing Interest face=" << outFace.getId() << " interest=" << interest.toUri() << endl;
 
-  //To-Do: if awaiting remedy, create excludeless interest
-  // insert out-record
-  /*if(pitEntry->isAwaitingRemedy())
-  {
-     shared_ptr<Interest> excludelessInterest = make_shared<Interest>();
-     excludelessInterest->setName(interest.getName());
-     excludelessInterest->setInterestLifetime(interest.getInterestLifetime());
-     excludelessInterest->setNonce(interest.getNonce());
-     //cout << "excludeless Interest created!" << endl;
-     pitEntry->insertOrUpdateOutRecord(outFace, *excludelessInterest);
-     //cout << "update complete!" << endl;
-  }
-  else
-  {
-      pitEntry->insertOrUpdateOutRecord(outFace, interest);
-  }*/
   pitEntry->insertOrUpdateOutRecord(outFace,interest);
 
   // send Interest
@@ -549,12 +519,10 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
        {
           NFD_LOG_DEBUG("Fixing PitEntry to record the correct data... clearing cache of " << lastRespondedData.getName());
           pitEntry->setAwaitingRemedy(false);
-          cout << "fixing remedy" << endl;
-          //TO-DO: Need to get OutRecord's respective Interest right now this doesn't make sense...
-          //I'm getting the In Record of where the record was sent out (not the in record for the out record)
-          //Interest pitInterest = pitEntry->getInRecords().front().getInterest();
-
           cout<<"removing data of " << lastRespondedData.getName() << endl;
+
+          //CAN'T ACTUALLY DELETE BECAUSE CS IS TABLE STRUCTURE => can't remove a row in the middle
+          //using flag marking...
 
           bool successfulDelete = m_cs.deleteEntry(lastRespondedData);
           cout << "delete was successful? " << successfulDelete << endl;
@@ -607,6 +575,7 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
          }
          else
          {
+            NFD_LOG_DEBUG(inRecord->getInterest().toUri() << " has expired before data received");
             //inRecord expired prior to receiving correct data
             inRecord->setInPreviousRemedy(false);
             inRecord->setReceivedExclude(false);
@@ -822,6 +791,8 @@ Forwarder::setAwaitingResponseTimer(const shared_ptr<pit::Entry>& pitEntry, bool
    //for each element, get the inFace ID. From Face ID, get FIB entry
    //from fib entry call measurements => get average response time.
    //Get max average response time else, default will be interest lifetime
+
+  //TO-DO: Will need to adjust this...
 
    time::nanoseconds expiryTime(20000000000); 
    scheduler::cancel(pitEntry->m_awaitingResponseTimer);

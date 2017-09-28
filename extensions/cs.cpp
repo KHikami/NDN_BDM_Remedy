@@ -153,7 +153,7 @@ Cs::deleteEntry(const Data& data)
   if(match->getName() == data.getName())
   {
      EntryImpl& entry = const_cast<EntryImpl&>(*match);
-     entry.reset();
+     entry.deleteEntry();
      return true;
   }
   return false;
@@ -170,7 +170,6 @@ Cs::find(const Interest& interest,
   const Name& prefix = interest.getName();
   bool isRightmost = interest.getChildSelector() == 1;
   NFD_LOG_DEBUG("find " << prefix << (isRightmost ? " R" : " L"));
-  //cout << "Normal find is rightmost? " << isRightmost << endl;
 
   iterator first = m_table.lower_bound(prefix);
   iterator last = m_table.end();

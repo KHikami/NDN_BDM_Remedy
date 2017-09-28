@@ -33,6 +33,7 @@ Entry::setData(shared_ptr<const Data> data, bool isUnsolicited)
 {
   m_data = data;
   m_isUnsolicited = isUnsolicited;
+  m_deleted = false;
 
   updateStaleTime();
 }
@@ -65,6 +66,11 @@ Entry::canSatisfy(const Interest& interest) const
   }
 
   if (interest.getMustBeFresh() == static_cast<int>(true) && this->isStale()) {
+    return false;
+  }
+
+  if(m_deleted)
+  {
     return false;
   }
 
