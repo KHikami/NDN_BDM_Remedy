@@ -30,6 +30,8 @@
 #include "pit-out-record.hpp"
 #include "core/scheduler.hpp"
 
+using namespace std;
+
 namespace nfd {
 
 namespace name_tree {
@@ -96,6 +98,18 @@ public:
   setRespondedData(const Data& d)
   {
      m_respondedData = d.shared_from_this();
+  }
+
+  void
+  addRespondedFace(const Face& f)
+  {
+     m_prevRespondedFaces.push_back(f.getId());
+  }
+
+  const vector<FaceId>
+  getRespondedFaces() const
+  {
+     return m_prevRespondedFaces;
   }
   
  /** \return Interest Name
@@ -287,6 +301,7 @@ private:
   shared_ptr<const Interest> m_interest;
   InRecordCollection m_inRecords;
   OutRecordCollection m_outRecords;
+  vector<FaceId> m_prevRespondedFaces;
 
   name_tree::Entry* m_nameTreeEntry;
 

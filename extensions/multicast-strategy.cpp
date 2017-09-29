@@ -24,6 +24,7 @@
  */
 
 #include "multicast-strategy.hpp"
+#include <stdlib.h>  
 #include "algorithm.hpp"
 
 namespace nfd {
@@ -45,24 +46,42 @@ MulticastStrategy::afterReceiveInterest(const Face& inFace, const Interest& inte
 {
   const fib::Entry& fibEntry = this->lookupFib(*pitEntry);
   const fib::NextHopList& nexthops = fibEntry.getNextHops();
+  
+  bool hasExclude = interest.toUri().find("ndn.Exclude")!= std::string::npos;
 
   for (fib::NextHopList::const_iterator it = nexthops.begin(); it != nexthops.end(); ++it) {
     Face& outFace = it->getFace();
     //cout << "considering face " << outFace.getId() << endl;
-    //bool wouldViolate = wouldViolateScope(inFace, interest, outFace);
-    //cout << "Would Violate Scope: " << wouldViolate << endl;
-    //bool canForward = canForwardToLegacy(*pitEntry, outFace);
-    //cout << "Can Forward To Legacy: " << canForward << endl;
     if (!wouldViolateScope(inFace, interest, outFace) &&
         canForwardToLegacy(*pitEntry, outFace)) {
-      //cout << "sending interest out on " << outFace.getId() << endl;
-      this->sendInterest(pitEntry, outFace, interest);
+
+      if(hasExclude)
+      {
+        if(canForwardExclude(*pitEntry, outFace))
+        {
+          //cout << "sending interest " << interest.toUri() << "out on " << outFace.getId() << endl;
+          this->sendInterest(pitEntry, outFace, interest);
+        }
+        else
+        {
+          shared_ptr<Interest> excludelessInterest = make_shared<Interest>();
+          excludelessInterest->setName(interest.getName());
+          excludelessInterest->setInterestLifetime(interest.getInterestLifetime());
+          //creating a new nonce... (otherwise it ends up in duplicate nonce loop at the next hop location)
+          excludelessInterest->setNonce(rand() % std::numeric_limits<uint32_t>::max());
+          //cout << "sending interest " << excludelessInterest->toUri() << "out on " << outFace.getId() << endl;
+          this->sendInterest(pitEntry, outFace, *excludelessInterest);
+        }
+      }
+      else
+      {
+         this->sendInterest(pitEntry, outFace, interest);
+      }
     }
   }
 
   if (!hasPendingOutRecords(*pitEntry)) {
     this->rejectPendingInterest(pitEntry);
-    //cout << "interest rejected" << endl;
   }
 }
 

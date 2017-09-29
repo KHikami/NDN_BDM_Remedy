@@ -174,7 +174,7 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
   if (hasDuplicateNonceInPit) {
     //need to check if this is an exclude interest => interest.toUri() contains exclude=...
     //interest is: /prefix/data/%FE%07?ndn.InterestLifetime=2000&ndn.Nonce=3530243069&ndn.Exclude=evil
-    cout << "duplicate nonce received for matching pit entry!" << endl;
+    //cout << "duplicate nonce received for matching pit entry!" << endl;
 
     if(hasExclude)
     {
@@ -204,7 +204,7 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
            //trigger remedy
            pitEntry->setAwaitingRemedy(true);
            //Send out remedy interest => send the exclude interest.
-           cout<< "Remedy Triggered for " << pitEntry->getInRecord(inFace)->getInterest().toUri() << endl;
+           //cout<< "Remedy Triggered for " << pitEntry->getInRecord(inFace)->getInterest().toUri() << endl;
            NFD_LOG_DEBUG("Remedy for " << pitEntry->getInRecord(inFace)->getInterest().toUri() << " triggered");
         } 
         
@@ -212,7 +212,8 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
        else
        {
          //give this one the cached response
-         cout<<"Attempting to give interest cached info"<<endl;
+         //cout<<"Attempting to give interest cached info"<<endl;
+         NFD_LOG_DEBUG("Responding with Cached Info");
          const Data& data = pitEntry->getRespondedData();
          beforeSatisfyInterest(*pitEntry, *m_csFace, data);
 
@@ -297,8 +298,9 @@ Forwarder::onContentStoreMiss(const Face& inFace, const shared_ptr<pit::Entry>& 
                               const Interest& interest)
 {
   NFD_LOG_DEBUG("onContentStoreMiss interest=" << interest.getName());
-  cout << "pursuing packet for :" << interest.toUri() << "and PitEntry is awaiting remedy? " << pitEntry->isAwaitingRemedy()<< endl;
+  //cout << "pursuing packet for :" << interest.toUri() << "and PitEntry is awaiting remedy? " << pitEntry->isAwaitingRemedy()<< endl;
   //CAN'T BE DONE: if not exclude interest and is awaiting remedy, try face that is different from the original answer face
+  //^ doing this in each strategy I am using :/
 
   // insert in-record
   pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
@@ -519,13 +521,13 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
        {
           NFD_LOG_DEBUG("Fixing PitEntry to record the correct data... clearing cache of " << lastRespondedData.getName());
           pitEntry->setAwaitingRemedy(false);
-          cout<<"removing data of " << lastRespondedData.getName() << endl;
+         // cout<<"removing data of " << lastRespondedData.getName() << endl;
 
           //CAN'T ACTUALLY DELETE BECAUSE CS IS TABLE STRUCTURE => can't remove a row in the middle
           //using flag marking...
 
           bool successfulDelete = m_cs.deleteEntry(lastRespondedData);
-          cout << "delete was successful? " << successfulDelete << endl;
+          //cout << "delete was successful? " << successfulDelete << endl;
           if(!successfulDelete)
           {
             //cout << "No such entry was found" << endl;
@@ -536,6 +538,7 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
     
     //store the record
     pitEntry->setRespondedData(data);
+    pitEntry->addRespondedFace(inFace);
 
     // cancel unsatisfy & straggler timer
     this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
@@ -633,7 +636,7 @@ Forwarder::onDataUnsolicited(Face& inFace, const Data& data)
 void
 Forwarder::onOutgoingData(const Data& data, Face& outFace)
 {
-  cout << "sending Data " << data.getName() << endl;
+  //cout << "sending Data " << data.getName() << endl;
   if (outFace.getId() == face::INVALID_FACEID) {
     NFD_LOG_WARN("onOutgoingData face=invalid data=" << data.getName());
     return;
@@ -717,7 +720,7 @@ void
 Forwarder::onOutgoingNack(const shared_ptr<pit::Entry>& pitEntry, const Face& outFace,
                           const lp::NackHeader& nack)
 {
-  cout << "NACK being sent!" << endl;
+  //cout << "NACK being sent!" << endl;
   if (outFace.getId() == face::INVALID_FACEID) {
     NFD_LOG_WARN("onOutgoingNack face=invalid" <<
                   " nack=" << pitEntry->getInterest().getName() <<
@@ -804,7 +807,7 @@ void
 Forwarder::onARTExpire(const shared_ptr<pit::Entry>& pitEntry, time::milliseconds dataFreshnessPeriod)
 {
    NFD_LOG_DEBUG("ARTimer Expired");
-   cout << "AR Timer for " << pitEntry << "has expired." << endl; 
+   //cout << "AR Timer for " << pitEntry << "has expired." << endl; 
    //nullify all the nonces as needed
    this->insertDeadNonceList(*pitEntry, true, dataFreshnessPeriod, 0);
 
