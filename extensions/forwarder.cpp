@@ -156,17 +156,28 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
   if(hasExclude)
   {
      //this is the only time an excludelessInterest is needed => finding a duplicate nonce
-     Interest excludelessInterest = Interest(interest.getName(), interest.getInterestLifetime());
-     excludelessInterest.setNonce(interest.getNonce());
-     pitEntry = m_pit.insert(excludelessInterest).first;
+     shared_ptr<Interest> excludelessInterest = make_shared<Interest>();
+     excludelessInterest->setName(interest.getName());
+     excludelessInterest->setInterestLifetime(interest.getInterestLifetime());
+     excludelessInterest->setNonce(interest.getNonce());
+     pitEntry = m_pit.insert(*excludelessInterest).first;
      NFD_LOG_DEBUG("Interest had exclude... retreived non-exclude interest for interest:" << interest.toUri());
+
+     //to handle the case where the exclude came after the original pit entry expired...
+     const pit::InRecordCollection& pitInRecords = pitEntry->getInRecords();
+     bool pitEntryHasRecords = pitInRecords.begin() != pitInRecords.end();
+     if(!pitEntryHasRecords)
+     {
+        m_pit.erase(pitEntry.get());//created a bad pitEntry...
+        pitEntry = m_pit.insert(interest).first;
+      }
   }
   else
   {
     // PIT insert
     pitEntry = m_pit.insert(interest).first;
   }
-
+  
   // detect duplicate Nonce in PIT entry. Note: if new interest has exclude => still hits for this :P
   bool hasDuplicateNonceInPit = fw::findDuplicateNonce(*pitEntry, interest.getNonce(), inFace) !=
                                 fw::DUPLICATE_NONCE_NONE;
@@ -211,6 +222,10 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
        }
        else
        {
+         // cancel unsatisfy & straggler timer
+         this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
+         this->cancelAwaitingResponseTimer(*pitEntry);
+
          //give this one the cached response
          //cout<<"Attempting to give interest cached info"<<endl;
          NFD_LOG_DEBUG("Responding with Cached Info");
@@ -221,6 +236,9 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
              [&] (fw::Strategy& strategy) { strategy.beforeSatisfyInterest(pitEntry, *m_csFace, data); });
          inRecord->setInPreviousRemedy(true);
          inRecord->setReceivedExclude(false);
+
+         this->setStragglerTimer(pitEntry, true, data.getFreshnessPeriod());
+         this->setAwaitingResponseTimer(pitEntry, true, data.getFreshnessPeriod());
          this->onOutgoingData(data,inFace);
          return;
        }
@@ -237,6 +255,7 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
 
   // cancel unsatisfy & straggler timer
   this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
+  this->cancelAwaitingResponseTimer(*pitEntry);
 
   //const pit::InRecordCollection& inRecords = pitEntry->getInRecords();
   //bool isPending = inRecords.begin() != inRecords.end();
@@ -393,6 +412,7 @@ Forwarder::onInterestReject(const shared_ptr<pit::Entry>& pitEntry)
 
   // set PIT straggler timer
   this->setStragglerTimer(pitEntry, false);
+  this->setAwaitingResponseTimer(pitEntry,false);
 }
 
 //on done awaiting response (this should only be called if I was waiting for an Exclude
@@ -429,11 +449,10 @@ Forwarder::onInterestFinalize(const shared_ptr<pit::Entry>& pitEntry, bool isSat
                 (isSatisfied ? " satisfied" : " unsatisfied"));
 
   // Dead Nonce List insert if necessary
-  this->insertDeadNonceList(*pitEntry, isSatisfied, dataFreshnessPeriod, 0);
+  //this->insertDeadNonceList(*pitEntry, isSatisfied, dataFreshnessPeriod, 0);
 
   // PIT delete
   this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
-  //m_pit.erase(pitEntry.get());
 }
 
 void
@@ -790,36 +809,34 @@ void
 Forwarder::setAwaitingResponseTimer(const shared_ptr<pit::Entry>& pitEntry, bool isSatisfied,
                     time::milliseconds dataFreshnessPeriod)
 {
-   //I want to get the face ID per pit entry and get the one who is the furthest away...
-   //for each element, get the inFace ID. From Face ID, get FIB entry
-   //from fib entry call measurements => get average response time.
-   //Get max average response time else, default will be interest lifetime
+   //Use last expiring in record. Use lifetime of that interest to set timer (since for it to get here
+   //it's lifetime was still valid). Since it is a mix of old and new interests => have to use latest
 
-  //TO-DO: Will need to adjust this...
-
-   time::nanoseconds expiryTime(20000000000); 
+   pit::InRecordCollection::iterator lastExpiring =
+    std::max_element(pitEntry->in_begin(), pitEntry->in_end(), &compare_InRecord_expiry);
+   time::milliseconds expiryTime = lastExpiring->getInterest().getInterestLifetime();
+   //time::nanoseconds expiryTime(20000000000); 
    scheduler::cancel(pitEntry->m_awaitingResponseTimer);
    pitEntry->m_awaitingResponseTimer = scheduler::schedule(expiryTime, bind(&Forwarder::onARTExpire, this, pitEntry, dataFreshnessPeriod));
-   //cout << "AR Timer set for " << pitEntry << "." << endl;
+   cout << "AR Timer set for " << pitEntry->getInterest().toUri() << " to expire in " << expiryTime << endl;
 }
 
 void
 Forwarder::onARTExpire(const shared_ptr<pit::Entry>& pitEntry, time::milliseconds dataFreshnessPeriod)
 {
-   NFD_LOG_DEBUG("ARTimer Expired");
-   //cout << "AR Timer for " << pitEntry << "has expired." << endl; 
-   //nullify all the nonces as needed
-   this->insertDeadNonceList(*pitEntry, true, dataFreshnessPeriod, 0);
+   NFD_LOG_DEBUG("ARTimer Expired for " << pitEntry->getInterest().toUri());
 
    //cancel the awaiting response timer
    this->cancelAwaitingResponseTimer(*pitEntry);
    this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
 
+   cout << "Timers are now all cancelled. Moving to deleting pitEntry" << endl;
+
    //delete the pit entry
    m_pit.erase(pitEntry.get());
+   cout << "pitEntry deleted!" << endl;
 }
 
-//might not be needed??? Though might be called when remedy started
 void
 Forwarder::cancelAwaitingResponseTimer(pit::Entry& pitEntry)
 {
