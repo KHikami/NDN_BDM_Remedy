@@ -111,6 +111,13 @@ public:
   {
      return m_prevRespondedFaces;
   }
+
+  void
+  deleteRespondedData()
+  {
+    m_prevRespondedFaces.clear();
+    m_respondedData = nullptr;
+  }
   
  /** \return Interest Name
    */

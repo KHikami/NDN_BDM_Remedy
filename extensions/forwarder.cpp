@@ -168,6 +168,7 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
      bool pitEntryHasRecords = pitInRecords.begin() != pitInRecords.end();
      if(!pitEntryHasRecords)
      {
+        pitEntry->clearInRecords();
         m_pit.erase(pitEntry.get());//created a bad pitEntry...
         pitEntry = m_pit.insert(interest).first;
       }
@@ -409,6 +410,7 @@ Forwarder::onInterestReject(const shared_ptr<pit::Entry>& pitEntry)
 
   // cancel unsatisfy & straggler timer
   this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
+  this->cancelAwaitingResponseTimer(*pitEntry);
 
   // set PIT straggler timer
   this->setStragglerTimer(pitEntry, false);
@@ -438,6 +440,8 @@ Forwarder::onInterestUnsatisfied(const shared_ptr<pit::Entry>& pitEntry)
   this->cancelAwaitingResponseTimer(*pitEntry);
 
   //erase in the case of NACK/unsatisfied
+  pitEntry->clearInRecords();
+  pitEntry->deleteRespondedData();
   m_pit.erase(pitEntry.get());
 }
 
@@ -451,7 +455,6 @@ Forwarder::onInterestFinalize(const shared_ptr<pit::Entry>& pitEntry, bool isSat
   // Dead Nonce List insert if necessary
   //this->insertDeadNonceList(*pitEntry, isSatisfied, dataFreshnessPeriod, 0);
 
-  // PIT delete
   this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
 }
 
@@ -509,6 +512,7 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
     {
       //have to delete the "lingering" out record for this face.
       pitEntry->deleteOutRecord(inFace);
+      NFD_LOG_DEBUG("Deleting Out Record for " << pitEntry->getInterest().toUri() << " from face " << inFace.getId());
       continue;
     }
 
@@ -561,6 +565,7 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
 
     // cancel unsatisfy & straggler timer
     this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
+    this->cancelAwaitingResponseTimer(*pitEntry);
 
     std::set<Face*> tempDownstreams;
     // gather all the possible faces (b/c getInRecords returns read only objects...)
@@ -818,7 +823,7 @@ Forwarder::setAwaitingResponseTimer(const shared_ptr<pit::Entry>& pitEntry, bool
    //time::nanoseconds expiryTime(20000000000); 
    scheduler::cancel(pitEntry->m_awaitingResponseTimer);
    pitEntry->m_awaitingResponseTimer = scheduler::schedule(expiryTime, bind(&Forwarder::onARTExpire, this, pitEntry, dataFreshnessPeriod));
-   cout << "AR Timer set for " << pitEntry->getInterest().toUri() << " to expire in " << expiryTime << endl;
+   //cout << "AR Timer set for " << pitEntry->getInterest().toUri() << " to expire in " << expiryTime << endl;
 }
 
 void
@@ -830,9 +835,12 @@ Forwarder::onARTExpire(const shared_ptr<pit::Entry>& pitEntry, time::millisecond
    this->cancelAwaitingResponseTimer(*pitEntry);
    this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
 
-   cout << "Timers are now all cancelled. Moving to deleting pitEntry" << endl;
+   //cout << "Timers are now all cancelled. Moving to deleting pitEntry" << endl;
 
    //delete the pit entry
+   pitEntry->clearInRecords();
+   cout << "In records cleared!" << endl;
+   pitEntry->deleteRespondedData();
    m_pit.erase(pitEntry.get());
    cout << "pitEntry deleted!" << endl;
 }
