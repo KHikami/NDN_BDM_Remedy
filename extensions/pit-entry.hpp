@@ -106,7 +106,7 @@ public:
      m_prevRespondedFaces.push_back(f.getId());
   }
 
-  const vector<FaceId>
+  const vector<uint64_t>
   getRespondedFaces() const
   {
      return m_prevRespondedFaces;
@@ -308,7 +308,7 @@ private:
   shared_ptr<const Interest> m_interest;
   InRecordCollection m_inRecords;
   OutRecordCollection m_outRecords;
-  vector<FaceId> m_prevRespondedFaces;
+  vector<uint64_t> m_prevRespondedFaces;
 
   name_tree::Entry* m_nameTreeEntry;
 

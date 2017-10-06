@@ -162,16 +162,6 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
      excludelessInterest->setNonce(interest.getNonce());
      pitEntry = m_pit.insert(*excludelessInterest).first;
      NFD_LOG_DEBUG("Interest had exclude... retreived non-exclude interest for interest:" << interest.toUri());
-
-     //to handle the case where the exclude came after the original pit entry expired...
-     const pit::InRecordCollection& pitInRecords = pitEntry->getInRecords();
-     bool pitEntryHasRecords = pitInRecords.begin() != pitInRecords.end();
-     if(!pitEntryHasRecords)
-     {
-        pitEntry->clearInRecords();
-        m_pit.erase(pitEntry.get());//created a bad pitEntry...
-        pitEntry = m_pit.insert(interest).first;
-      }
   }
   else
   {
@@ -211,7 +201,9 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
 
         double triggerRatio = 0.5;
 
-        if(excludeReceivedCount/numOfRecords > triggerRatio)
+        NFD_LOG_DEBUG("Number of excludes received: " << excludeReceivedCount << " Number of Records: " << numOfRecords);
+
+        if(excludeReceivedCount/numOfRecords >= triggerRatio)
         {
            //trigger remedy
            pitEntry->setAwaitingRemedy(true);
@@ -257,9 +249,6 @@ Forwarder::onIncomingInterest(Face& inFace, const Interest& interest)
   // cancel unsatisfy & straggler timer
   this->cancelUnsatisfyAndStragglerTimer(*pitEntry);
   this->cancelAwaitingResponseTimer(*pitEntry);
-
-  //const pit::InRecordCollection& inRecords = pitEntry->getInRecords();
-  //bool isPending = inRecords.begin() != inRecords.end();
 
   bool isSat = !pitEntry->isAwaitingRemedy() && pitEntry->hasRespondedData();
   NS_LOG_DEBUG("PitEntry is already satisfied: " << isSat);
@@ -365,6 +354,9 @@ Forwarder::onContentStoreHit(const Face& inFace, const shared_ptr<pit::Entry>& p
   }
   NFD_LOG_DEBUG("onContentStoreHit interest=" << interest.getName());
 
+   // insert in-record
+  pitEntry->insertOrUpdateInRecord(const_cast<Face&>(inFace), interest);
+
    beforeSatisfyInterest(*pitEntry, *m_csFace, data);
    this->dispatchToStrategy(*pitEntry,
    [&] (fw::Strategy& strategy) { strategy.beforeSatisfyInterest(pitEntry, *m_csFace, data); });
@@ -440,7 +432,11 @@ Forwarder::onInterestUnsatisfied(const shared_ptr<pit::Entry>& pitEntry)
   this->cancelAwaitingResponseTimer(*pitEntry);
 
   //erase in the case of NACK/unsatisfied
-  pitEntry->clearInRecords();
+  if(pitEntry->hasInRecords())
+  {
+    cout << "erasing in records of pit entry" << endl;
+    pitEntry->clearInRecords();
+  }
   pitEntry->deleteRespondedData();
   m_pit.erase(pitEntry.get());
 }
@@ -500,6 +496,8 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
   FaceId lastFaceId = m_faceTable.getLastFaceId();
   bool fromApplicationData = (inFace.getId() == lastFaceId);
 
+  bool wasAwaitingRemedy = false;
+
   for (const shared_ptr<pit::Entry>& pitEntry : pitMatches) {
     NFD_LOG_DEBUG("onIncomingData matching=" << pitEntry->getName());
     //cout << "onIncomingData matching=" << pitEntry->getName() << "with name " << data.getName() << endl;
@@ -507,59 +505,57 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
     //since def of is pending is no longer if it exists or no in records => have to have this condition else
     //last responded data is overwritten when no remedy triggered
     bool pitMatchSat = !pitEntry->isAwaitingRemedy() && pitEntry->hasRespondedData();
-   
-    if(pitMatchSat && !fromApplicationData)
-    {
-      //have to delete the "lingering" out record for this face.
-      pitEntry->deleteOutRecord(inFace);
-      NFD_LOG_DEBUG("Deleting Out Record for " << pitEntry->getInterest().toUri() << " from face " << inFace.getId());
-      continue;
-    }
 
-    //ignore awaiting remedy logic if from Application
-    if(fromApplicationData)
-    {
-       //cout << "data is from application" << endl;
-       NFD_LOG_DEBUG("Data is from Application");
-       pitEntry->setAwaitingRemedy(false);
-    }
-
-    //if is awaiting remedy => clear original data, reset awaiting remedy but store that it was awaiting remedy prior
-    bool wasAwaitingRemedy = false;
-    if(pitEntry->isAwaitingRemedy())
-    {
-       wasAwaitingRemedy = true;
-
-       Data lastRespondedData = pitEntry->getRespondedData();
-
-       if(lastRespondedData.getName() == data.getName())
+       if(pitMatchSat && !fromApplicationData)
        {
-         //ignore this pitmatch...
-         //duplicate of the original bad data => don't want this one...
-         NFD_LOG_DEBUG("Duplicate Data of " << data.getName() << " received");
-         //cout << "duplicate data received" << endl;
+         //have to delete the "lingering" out record for this face.
+         pitEntry->deleteOutRecord(inFace);
+         NFD_LOG_DEBUG("Deleting Out Record for " << pitEntry->getInterest().toUri() << " from face " << inFace.getId());
          continue;
        }
-       else
+
+       //ignore awaiting remedy logic if from Application
+       if(fromApplicationData)
        {
-          NFD_LOG_DEBUG("Fixing PitEntry to record the correct data... clearing cache of " << lastRespondedData.getName());
+          //cout << "data is from application" << endl;
+          NFD_LOG_DEBUG("Data is from Application");
           pitEntry->setAwaitingRemedy(false);
-         // cout<<"removing data of " << lastRespondedData.getName() << endl;
+        }
 
-          //CAN'T ACTUALLY DELETE BECAUSE CS IS TABLE STRUCTURE => can't remove a row in the middle
-          //using flag marking...
+       //if is awaiting remedy => clear original data, reset awaiting remedy but store that it was awaiting remedy prior
+       
+       if(pitEntry->isAwaitingRemedy())
+       {
+          wasAwaitingRemedy = true;
 
-          bool successfulDelete = m_cs.deleteEntry(lastRespondedData);
-          //cout << "delete was successful? " << successfulDelete << endl;
-          if(!successfulDelete)
+          Data lastRespondedData = pitEntry->getRespondedData();
+
+          if(lastRespondedData.getName() == data.getName())
           {
-            //cout << "No such entry was found" << endl;
-            NFD_LOG_DEBUG("Previously responded data entry was not found");
+            //ignore this pitmatch...
+            //duplicate of the original bad data => don't want this one...
+            NFD_LOG_DEBUG("Duplicate Data of " << data.getName() << " received");
+            //cout << "duplicate data received" << endl;
+            continue;
           }
-       }
-    }
-    
-    //store the record
+          else
+          {
+            NFD_LOG_DEBUG("Fixing PitEntry to record the correct data... clearing cache of " << lastRespondedData.getName());
+            pitEntry->setAwaitingRemedy(false);
+            // cout<<"removing data of " << lastRespondedData.getName() << endl;
+
+            //CAN'T ACTUALLY DELETE BECAUSE CS IS TABLE STRUCTURE => can't remove a row in the middle
+            //using flag marking...
+
+            bool successfulDelete = m_cs.deleteEntry(lastRespondedData);
+            //cout << "delete was successful? " << successfulDelete << endl;
+            if(!successfulDelete)
+            {
+              //cout << "No such entry was found" << endl;
+              NFD_LOG_DEBUG("Previously responded data entry was not found");
+            }
+         }
+      }
     pitEntry->setRespondedData(data);
     pitEntry->addRespondedFace(inFace);
 
@@ -573,14 +569,17 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
        tempDownstreams.insert(&inRecord.getFace());
     }
 
+    pit::InRecordCollection::iterator inRecord;
+
     // for all the faces for this pitEntry, check if is a pending downstream otherwise do maintenance
     for (Face* pendingDownstream : tempDownstreams) {
-       pit::InRecordCollection::iterator inRecord = pitEntry->getInRecord(*pendingDownstream);
+       inRecord = pitEntry->getInRecord(*pendingDownstream);
        if(wasAwaitingRemedy)
        {
            //PitEntry is now remedied => can only remedy valid interests where exclude was given
            if(inRecord->getReceivedExclude() && inRecord->getExpiry() > now)
            {
+              NS_LOG_DEBUG("Adding face " << pendingDownstream->getId() << " to list of pending downstreams");
               //exclude was received => clear the record
               inRecord->setInPreviousRemedy(true);
               inRecord->setReceivedExclude(false);
@@ -838,7 +837,11 @@ Forwarder::onARTExpire(const shared_ptr<pit::Entry>& pitEntry, time::millisecond
    //cout << "Timers are now all cancelled. Moving to deleting pitEntry" << endl;
 
    //delete the pit entry
-   pitEntry->clearInRecords();
+  if(pitEntry->hasInRecords())
+  {
+    cout << "erasing in records of pit entry" << endl;
+    pitEntry->clearInRecords();
+  }
    cout << "In records cleared!" << endl;
    pitEntry->deleteRespondedData();
    m_pit.erase(pitEntry.get());
