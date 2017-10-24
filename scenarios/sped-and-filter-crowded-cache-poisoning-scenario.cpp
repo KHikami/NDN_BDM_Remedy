@@ -19,7 +19,7 @@
  * Created by KHikami (Rachel Chu) 2017
  **/
 
-//just sped up reaction time
+//extension on the sped up scenario to have a new strategy that after a threshold will not accept evil producer at all
 
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
@@ -150,7 +150,7 @@ main(int argc, char* argv[])
 
   Simulator::Stop(Seconds(20.0));
 
-  ndn::AppDelayTracer::InstallAll("results/sped-crowded-cache-poisoning-app-delays-trace.txt");
+  ndn::AppDelayTracer::InstallAll("results/sped-and-filter-crowded-cache-poisoning-app-delays-trace.txt");
 
   Simulator::Run();
   Simulator::Destroy();

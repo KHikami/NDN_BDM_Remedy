@@ -19,7 +19,7 @@
  * Created by KHikami (Rachel Chu) 2017
  **/
 
-//just sped up reaction time
+//extension on the sped up scenario to have a new strategy that after a threshold will not accept evil producer at all
 
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
@@ -27,26 +27,24 @@
 #include "ns3/point-to-point-layout-module.h"
 #include "ns3/ndnSIM-module.h"
 
-using namespace std;
-
 namespace ns3 {
-namespace ndn {
 
-//has the following topology of:
-/* (3x consumer) --- ( ) --- ( ) ---- ( ) --- (producer)
-                   |       |
-                (evil)  (signer)
-
-    this is to test how long it will take for the cache to clear/be able to get the good packet
-    with an EF flag set upon receiving an "evil" packet (same data prefix but different payload)
-
-   This scenario uses 3 consumers each with a different amount of delay to see the impact the cache had on the other 2 consumers.
-*/                 
+/**
+ * This scenario simulates a grid topology (using PointToPointGrid module)
+ *
+ * (consumer1) -- ( ) ----(signer)
+ *      |          |         |
+ * (consumer2) -- ( ) ---  (evil)
+ *      |          |         |
+ * (consumer3) -- ( ) -- (producer)
+ *
+ * All links are 1Mbps with propagation 10ms delay.
+*/
 
 int
 main(int argc, char* argv[])
 {
-  // setting default parameters for PointToPoint links and channels
+  // Setting default parameters for PointToPoint links and channels
   Config::SetDefault("ns3::PointToPointNetDevice::DataRate", StringValue("1Mbps"));
   Config::SetDefault("ns3::PointToPointChannel::Delay", StringValue("10ms"));
   Config::SetDefault("ns3::DropTailQueue::MaxPackets", StringValue("10"));
@@ -55,47 +53,36 @@ main(int argc, char* argv[])
   CommandLine cmd;
   cmd.Parse(argc, argv);
 
-  // Creating nodes
-  NodeContainer nodes;
-  nodes.Create(9);
-
-  // Connecting nodes using links between each one as shown in topology map
+  // Creating 3x3 topology
   PointToPointHelper p2p;
-  p2p.Install(nodes.Get(0), nodes.Get(1)); //consumer connected to one router
-  p2p.Install(nodes.Get(1), nodes.Get(2));
-  p2p.Install(nodes.Get(2), nodes.Get(3));
-  p2p.Install(nodes.Get(2), nodes.Get(4));//"producer"
-  p2p.Install(nodes.Get(5), nodes.Get(2));//evil producer
-  p2p.Install(nodes.Get(6), nodes.Get(3));//signer
-  p2p.Install(nodes.Get(7), nodes.Get(1));//consumer 2 connected to router 1
-  p2p.Install(nodes.Get(8), nodes.Get(1));//consumer 3 connected to router 1
+  PointToPointGridHelper grid(3, 3, p2p);
+  grid.BoundingBox(100, 100, 200, 200);
 
   // Install NDN stack on all nodes
-  StackHelper ndnHelper;
+  ndn::StackHelper ndnHelper;
   ndnHelper.InstallAll();
 
-  // Choosing forwarding strategy (can change this later when defining consumer and producer)
-  StrategyChoiceHelper::InstallAll("/prefix", "/localhost/nfd/strategy/multicast");
+  // Set BestRoute strategy
+  ndn::StrategyChoiceHelper::InstallAll("/", "/localhost/nfd/strategy/multicast");
 
-  // Install global routing helper on all nodes
+  // Installing global routing interface on all nodes
   ndn::GlobalRoutingHelper ndnGlobalRoutingHelper;
   ndnGlobalRoutingHelper.InstallAll();
 
-  //labeling which node is which:
-  Ptr<Node> goodProducer = nodes.Get(4);
-  Ptr<Node> evilProducer = nodes.Get(5);
-  Ptr<Node> signer = nodes.Get(6);
-  Ptr<Node> consumer1= nodes.Get(0);
-  Ptr<Node> consumer2= nodes.Get(7);
-  Ptr<Node> consumer3= nodes.Get(8);
+  // Labeling which node is which.
+  Ptr<Node> goodProducer = grid.GetNode(2,2);
+  Ptr<Node> evilProducer = grid.GetNode(1,2);
+  Ptr<Node> signer = grid.GetNode(0,2);
+  Ptr<Node> consumer1= grid.GetNode(0,0);
+  Ptr<Node> consumer2= grid.GetNode(1,0);
+  Ptr<Node> consumer3= grid.GetNode(2,0);
 
-  // Installing applications
+  // Install NDN applications
   std::string dataPrefix = "/prefix/data";
   std::string keyPrefix = "/prefix/key";
   std::string goodPayloadSize = "1024";
 
-  // Consumer1: delay start time of 0
-  AppHelper consumerHelper("ns3::ndn::SecurityToyClientApp");
+  ndn::AppHelper consumerHelper("ns3::ndn::SecurityToyClientApp");
   consumerHelper.SetPrefix(dataPrefix);
   consumerHelper.SetAttribute("WaitTime", StringValue("1.0"));
   consumerHelper.SetAttribute("ReactionTime", StringValue("0.25"));
@@ -103,7 +90,7 @@ main(int argc, char* argv[])
   consumerHelper.Install(consumer1);
 
   //Consumer2: delay start time of 1
-  AppHelper consumerHelper2("ns3::ndn::SecurityToyClientApp");
+  ndn::AppHelper consumerHelper2("ns3::ndn::SecurityToyClientApp");
   consumerHelper2.SetPrefix(dataPrefix);
   consumerHelper2.SetAttribute("WaitTime", StringValue("1.0"));
   consumerHelper.SetAttribute("ReactionTime", StringValue("0.25"));
@@ -112,7 +99,7 @@ main(int argc, char* argv[])
   consumerHelper2.Install(consumer2);
 
   //Consumer3: delay start time of 2
-  AppHelper consumerHelper3("ns3::ndn::SecurityToyClientApp");
+  ndn::AppHelper consumerHelper3("ns3::ndn::SecurityToyClientApp");
   consumerHelper3.SetPrefix(dataPrefix);
   consumerHelper3.SetAttribute("WaitTime", StringValue("1.0"));
   consumerHelper.SetAttribute("ReactionTime", StringValue("0.25"));
@@ -144,13 +131,12 @@ main(int argc, char* argv[])
 
   ndnGlobalRoutingHelper.AddOrigins(keyPrefix, signer);
 
-  
-  //supposedly initializes and creates fibs
+  // Calculate and install FIBs
   ndn::GlobalRoutingHelper::CalculateRoutes();
 
   Simulator::Stop(Seconds(20.0));
 
-  ndn::AppDelayTracer::InstallAll("results/sped-crowded-cache-poisoning-app-delays-trace.txt");
+  ndn::AppDelayTracer::InstallAll("results/sped-and-filter-distributed-cache-poisoning-app-delays-trace.txt");
 
   Simulator::Run();
   Simulator::Destroy();
@@ -158,12 +144,10 @@ main(int argc, char* argv[])
   return 0;
 }
 
-} // namespace ndn
-
 } // namespace ns3
 
 int
 main(int argc, char* argv[])
 {
-  return ns3::ndn::main(argc, argv);
+  return ns3::main(argc, argv);
 }

@@ -19,7 +19,7 @@
  * Created by KHikami (Rachel Chu) 2017
  **/
 
-//just sped up reaction time
+//extension on the sped up scenario to have a new strategy that after a threshold will not accept evil producer at all
 
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
@@ -33,14 +33,12 @@ namespace ns3 {
 namespace ndn {
 
 //has the following topology of:
-/* (3x consumer) --- ( ) --- ( ) ---- ( ) --- (producer)
+/* (consumer) --- ( ) --- ( ) ---- ( ) --- (producer)
                    |       |
                 (evil)  (signer)
 
     this is to test how long it will take for the cache to clear/be able to get the good packet
     with an EF flag set upon receiving an "evil" packet (same data prefix but different payload)
-
-   This scenario uses 3 consumers each with a different amount of delay to see the impact the cache had on the other 2 consumers.
 */                 
 
 int
@@ -57,7 +55,7 @@ main(int argc, char* argv[])
 
   // Creating nodes
   NodeContainer nodes;
-  nodes.Create(9);
+  nodes.Create(7);
 
   // Connecting nodes using links between each one as shown in topology map
   PointToPointHelper p2p;
@@ -67,11 +65,10 @@ main(int argc, char* argv[])
   p2p.Install(nodes.Get(2), nodes.Get(4));//"producer"
   p2p.Install(nodes.Get(5), nodes.Get(2));//evil producer
   p2p.Install(nodes.Get(6), nodes.Get(3));//signer
-  p2p.Install(nodes.Get(7), nodes.Get(1));//consumer 2 connected to router 1
-  p2p.Install(nodes.Get(8), nodes.Get(1));//consumer 3 connected to router 1
 
   // Install NDN stack on all nodes
   StackHelper ndnHelper;
+  //ndnHelper.SetOldContentStore("ns3::ndn::cs::Freshness::Lru");
   ndnHelper.InstallAll();
 
   // Choosing forwarding strategy (can change this later when defining consumer and producer)
@@ -85,40 +82,21 @@ main(int argc, char* argv[])
   Ptr<Node> goodProducer = nodes.Get(4);
   Ptr<Node> evilProducer = nodes.Get(5);
   Ptr<Node> signer = nodes.Get(6);
-  Ptr<Node> consumer1= nodes.Get(0);
-  Ptr<Node> consumer2= nodes.Get(7);
-  Ptr<Node> consumer3= nodes.Get(8);
+  NodeContainer consumerNodes;
+  consumerNodes.Add(nodes.Get(0));
 
   // Installing applications
   std::string dataPrefix = "/prefix/data";
   std::string keyPrefix = "/prefix/key";
   std::string goodPayloadSize = "1024";
 
-  // Consumer1: delay start time of 0
+  // Consumer
   AppHelper consumerHelper("ns3::ndn::SecurityToyClientApp");
   consumerHelper.SetPrefix(dataPrefix);
-  consumerHelper.SetAttribute("WaitTime", StringValue("1.0"));
+  consumerHelper.SetAttribute("WaitTime", StringValue("1.0"));//sends out a new interest for a packet per this int.
   consumerHelper.SetAttribute("ReactionTime", StringValue("0.25"));
   consumerHelper.SetAttribute("KeyName", StringValue(keyPrefix));
-  consumerHelper.Install(consumer1);
-
-  //Consumer2: delay start time of 1
-  AppHelper consumerHelper2("ns3::ndn::SecurityToyClientApp");
-  consumerHelper2.SetPrefix(dataPrefix);
-  consumerHelper2.SetAttribute("WaitTime", StringValue("1.0"));
-  consumerHelper.SetAttribute("ReactionTime", StringValue("0.25"));
-  consumerHelper2.SetAttribute("KeyName", StringValue(keyPrefix));
-  consumerHelper2.SetAttribute("DelayStart", StringValue("1"));
-  consumerHelper2.Install(consumer2);
-
-  //Consumer3: delay start time of 2
-  AppHelper consumerHelper3("ns3::ndn::SecurityToyClientApp");
-  consumerHelper3.SetPrefix(dataPrefix);
-  consumerHelper3.SetAttribute("WaitTime", StringValue("1.0"));
-  consumerHelper.SetAttribute("ReactionTime", StringValue("0.25"));
-  consumerHelper3.SetAttribute("KeyName", StringValue(keyPrefix));
-  consumerHelper3.SetAttribute("DelayStart", StringValue("2"));
-  consumerHelper3.Install(consumer3);
+  consumerHelper.Install(consumerNodes);
 
   //Good Producer
   ndn::AppHelper producerHelper("ns3::ndn::Producer");
@@ -139,7 +117,7 @@ main(int argc, char* argv[])
   //Signer
   ndn::AppHelper signerHelper("ns3::ndn::Producer");
   signerHelper.SetPrefix(keyPrefix);
-  signerHelper.SetAttribute("PayloadSize", StringValue("1024"));
+  signerHelper.SetAttribute("PayloadSize", StringValue(goodPayloadSize));
   signerHelper.Install(signer);
 
   ndnGlobalRoutingHelper.AddOrigins(keyPrefix, signer);
@@ -150,7 +128,7 @@ main(int argc, char* argv[])
 
   Simulator::Stop(Seconds(20.0));
 
-  ndn::AppDelayTracer::InstallAll("results/sped-crowded-cache-poisoning-app-delays-trace.txt");
+  ndn::AppDelayTracer::InstallAll("results/sped-and-filter-basic-cache-poisoning-app-delays-trace.txt");
 
   Simulator::Run();
   Simulator::Destroy();

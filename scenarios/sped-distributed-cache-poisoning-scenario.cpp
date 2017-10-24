@@ -19,7 +19,7 @@
  * Created by KHikami (Rachel Chu) 2017
  **/
 
-//sped up and new strategy
+//just sped up reaction time
 
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
