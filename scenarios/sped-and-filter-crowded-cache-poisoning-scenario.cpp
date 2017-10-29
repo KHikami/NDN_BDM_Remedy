@@ -75,7 +75,7 @@ main(int argc, char* argv[])
   ndnHelper.InstallAll();
 
   // Choosing forwarding strategy (can change this later when defining consumer and producer)
-  StrategyChoiceHelper::InstallAll("/prefix", "/localhost/nfd/strategy/multicast");
+  StrategyChoiceHelper::InstallAll("/prefix", "/localhost/nfd/strategy/filter");
 
   // Install global routing helper on all nodes
   ndn::GlobalRoutingHelper ndnGlobalRoutingHelper;

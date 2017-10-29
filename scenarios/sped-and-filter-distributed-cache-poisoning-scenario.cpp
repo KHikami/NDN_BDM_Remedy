@@ -63,7 +63,7 @@ main(int argc, char* argv[])
   ndnHelper.InstallAll();
 
   // Set BestRoute strategy
-  ndn::StrategyChoiceHelper::InstallAll("/", "/localhost/nfd/strategy/multicast");
+  ndn::StrategyChoiceHelper::InstallAll("/", "/localhost/nfd/strategy/filter");
 
   // Installing global routing interface on all nodes
   ndn::GlobalRoutingHelper ndnGlobalRoutingHelper;

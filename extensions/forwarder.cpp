@@ -535,6 +535,9 @@ Forwarder::onIncomingData(Face& inFace, const Data& data)
             //ignore this pitmatch...
             //duplicate of the original bad data => don't want this one...
             NFD_LOG_DEBUG("Duplicate Data of " << data.getName() << " received");
+            cout << "Duplicate Data of " << data.getName() << " received" << endl;
+            this->dispatchToStrategy(*pitEntry,
+      [&] (fw::Strategy& strategy) { strategy.onDuplicateBadDataReceived(inFace); });
             //cout << "duplicate data received" << endl;
             continue;
           }
